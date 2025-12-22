@@ -58,13 +58,34 @@ while True:
     # If at least one hand was detected
     if results.multi_hand_landmarks:
         # Loop through each detected hand
-        for hand_landmarks in results.multi_hand_landmarks:
+        for i, hand_landmarks in enumerate(results.multi_hand_landmarks):
             # Draw landmarks (dots) and connections (lines) on the hand
             mp_drawing.draw_landmarks(
                 image,                        # Image to draw on
                 hand_landmarks,               # Hand landmark data
                 mp_hands.HAND_CONNECTIONS     # Predefined hand connections
             )
+            lm = hand_landmarks.landmark
+
+            hand_label = results.multi_handedness[i].classification[0].label  # "Left" or "Right"
+
+            if hand_label == "Right":
+                thumb_up = 1 if lm[4].x < lm[3].x else 0
+            else:
+                thumb_up = 1 if lm[4].x > lm[3].x else 0
+
+            tips = [8, 12, 16, 20]
+            pips = [6, 10, 14, 18]
+
+            fingers = []  # will store 1 if finger is up, 0 if down
+
+            for tip, pip in zip(tips, pips):
+                fingers.append(1 if lm[tip].y < lm[pip].y else 0)
+
+            all_fingers = [thumb_up] + fingers
+            count_up = sum(all_fingers)
+            text = f"{hand_label}: {count_up} fingers"
+            cv2.putText(image, text, (10, 60 + 40*i), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
     # -------------------- Display --------------------
 
