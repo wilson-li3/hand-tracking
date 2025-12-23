@@ -1,0 +1,44 @@
+/* web/src/style.css */
+
+html, body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  width: 100%;
+  height: 100%;
+  background: black;
+}
+
+#bg-video, #three-canvas {
+  transform: scaleX(-1);
+}
+
+
+/* Fullscreen webcam video background */
+#bg-video {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  object-fit: cover;
+  z-index: 0;
+}
+
+/* Landmarks overlay */
+#overlay-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 1;
+  pointer-events: none;
+}
+
+/* Three.js canvas overlay */
+#three-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 2;
+}
