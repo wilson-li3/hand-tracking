@@ -74,6 +74,36 @@ scene.add(cursor)
 let targetX = 0
 let targetZ = 0
 
+// ----- Two-hand gesture state -----
+const PINCH_THRESH = 0.06 // tweak 0.04–0.08
+let twoPinchActive = false
+
+let lastMid = null   // {x,y} normalized
+
+// Smooth + sensitivity
+const ROT_SENS = 3.0        // bigger = faster rotation
+const SMOOTH = 0.25         // 0..1 (higher = snappier, lower = smoother)
+
+// Prevent grid from going vertical (limit pitch)
+const MIN_PITCH = -0.9      // ~ -52 degrees
+const MAX_PITCH = 0.2       // ~ 11 degrees
+
+let smDx = 0  
+let smDy = 0
+
+function dist2(a, b) {
+  const dx = a.x - b.x
+  const dy = a.y - b.y
+  return dx * dx + dy * dy
+}
+
+function isPinching(handLm) {
+  const thumb = handLm[4] // thumb tip
+  const index = handLm[8] // index tip
+  return dist2(thumb, index) < PINCH_THRESH * PINCH_THRESH
+}
+
+
 // -------------------- 4) WebSocket input from Python --------------------
 let usingWebSocket = false
 const ws = new WebSocket('ws://localhost:8765')
@@ -129,6 +159,7 @@ window.addEventListener('mousedown', (e) => {
 window.addEventListener('mouseup', () => (dragging = false))
 window.addEventListener('mousemove', (e) => {
   if (!dragging) return
+  if (twoPinchActive) return // don't conflict with pinch-rotate
   const dx = e.clientX - lastX
   const dy = e.clientY - lastY
   lastX = e.clientX
@@ -152,23 +183,91 @@ const hands = new Hands({
 })
 
 hands.setOptions({
-  maxNumHands: 1,
+  maxNumHands: 2,
   modelComplexity: 1,
   minDetectionConfidence: 0.7,
   minTrackingConfidence: 0.7,
   selfieMode: true,
 })
 
+
 hands.onResults((results) => {
   ctx.clearRect(0, 0, overlay.width, overlay.height)
 
-  const lm = results.multiHandLandmarks?.[0]
-  if (!lm) return
+  const handsLm = results.multiHandLandmarks || []
+  if (handsLm.length === 0) {
+  twoPinchActive = false
+  lastMid = null
+  smDx = 0
+  smDy = 0
+  return
+}
 
-  // draw utils already handle normalized coords -> pixels
-  drawConnectors(ctx, lm, HAND_CONNECTIONS, { lineWidth: 4 })
-  drawLandmarks(ctx, lm, { radius: 6 })
+
+  // Draw all detected hands
+  for (const lm of handsLm) {
+    drawConnectors(ctx, lm, HAND_CONNECTIONS, { lineWidth: 4 })
+    drawLandmarks(ctx, lm, { radius: 6 })
+  }
+
+  // Need 2 hands
+  if (handsLm.length < 2) {
+  twoPinchActive = false
+  lastMid = null
+  smDx = 0
+  smDy = 0
+  return
+}
+
+
+  const lmA = handsLm[0]
+  const lmB = handsLm[1]
+
+  const pinchA = isPinching(lmA)
+  const pinchB = isPinching(lmB)
+
+  // Only rotate when BOTH are pinching
+  if (!(pinchA && pinchB)) {
+  twoPinchActive = false
+  lastMid = null
+  smDx = 0
+  smDy = 0
+  return
+}
+
+
+  const a = lmA[8] // index tip
+  const b = lmB[8]
+
+  const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
+
+if (!twoPinchActive) {
+  twoPinchActive = true
+  lastMid = mid
+  smDx = 0
+  smDy = 0
+  return
+}
+
+
+// Midpoint delta (normalized units)
+const dxMid = mid.x - lastMid.x
+const dyMid = mid.y - lastMid.y
+
+// Low-pass filter for smoothness
+smDx += (dxMid - smDx) * SMOOTH
+smDy += (dyMid - smDy) * SMOOTH
+
+// Map midpoint motion -> rotation (diagonal is naturally seamless)
+grid.rotation.y -= smDx * ROT_SENS  // horizontal drag => yaw
+grid.rotation.x += smDy * ROT_SENS  // vertical drag   => pitch
+
+// Clamp pitch so grid never goes vertical
+grid.rotation.x = Math.max(MIN_PITCH, Math.min(MAX_PITCH, grid.rotation.x))
+
+lastMid = mid
 })
+
 
 
 // Feed frames to MediaPipe Hands (in-browser)
