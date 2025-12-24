@@ -8,9 +8,38 @@ import { drawConnectors, drawLandmarks } from '@mediapipe/drawing_utils'
 
 // -------------------- TUNING --------------------
 const GRID_SCALE = 8
-const ROUTE_RADIUS = 0.08   // thickness of route
-const ROUTE_SEGMENTS = 8   // smoothness
 
+// Tube route look
+const ROUTE_RADIUS = 0.08
+const ROUTE_SEGMENTS = 8
+const ROUTE_COLOR = 0xFFA500
+
+// Gesture / interaction tuning
+const PINCH_THRESH = 0.06 // 0.04–0.08
+
+// Rotate smoothing
+const ROT_SENS = 3.0
+const ROT_SMOOTH = 0.25
+
+// Prevent board from going vertical
+const MIN_PITCH = -0.9
+const MAX_PITCH = 0.2
+
+// Mode lock: prevents accidental draw when transitioning rotate <-> draw
+let mode = 'none' // 'none' | 'rotate' | 'draw'
+let lastModeChange = 0
+const MODE_COOLDOWN_MS = 180
+
+// Drawing smoothing / filtering
+const DRAW_SMOOTH = 0.35    // 0..1 higher = smoother
+const DRAW_MIN_STEP = 0.18  // world units; ignore tiny movement
+
+// Straightening
+const STRAIGHT_ANGLE_DEG = 12 // smaller = straighter (8–18)
+const STRAIGHT_SNAP = 0.6     // 0..1 how hard to snap
+
+// Tube perf
+const ROUTE_REBUILD_EVERY = 3 // rebuild tube every N accepted points
 
 // -------------------- 1) Webcam video (DOM) --------------------
 const video = document.createElement('video')
@@ -20,14 +49,12 @@ video.muted = true
 video.playsInline = true
 document.body.appendChild(video)
 
-// Start webcam ASAP (normal refresh should work for you)
 const stream = await navigator.mediaDevices.getUserMedia({
   video: { facingMode: 'user' },
   audio: false,
 })
 video.srcObject = stream
 
-// Safari reliability: wait until metadata is ready, then explicitly play()
 await new Promise((res) => (video.onloadedmetadata = res))
 await video.play()
 
@@ -76,93 +103,92 @@ const cursor = new THREE.Mesh(
 cursor.position.set(0, 0.2, 0)
 board.add(cursor)
 
-// ----- Route drawing state -----
+// -------------------- Route drawing state --------------------
 let isDrawing = false
-let currentRoute = [] // THREE.Vector3 points for the active route
+let currentRoute = [] // THREE.Vector3 points
 let routeMesh = null
-const routes = [] // optional: store finished routes
+const routes = []
+
+let drawSmoothPoint = null
+let acceptedPointsSinceRebuild = 0
 
 function startRoute() {
   isDrawing = true
   currentRoute = []
+  drawSmoothPoint = null
+  acceptedPointsSinceRebuild = 0
 
-  // start a fresh line
   if (routeMesh) {
     board.remove(routeMesh)
     routeMesh.geometry.dispose()
     routeMesh.material.dispose()
     routeMesh = null
   }
-
 }
 
 function endRoute() {
   if (!isDrawing) return
   isDrawing = false
+  drawSmoothPoint = null
 
-  // keep the finished route (optional)
+  // finalize: rebuild once at the end so it looks clean
+  rebuildRouteMesh()
+
   if (currentRoute.length >= 2 && routeMesh) {
     routes.push({ points: currentRoute, mesh: routeMesh })
-    routeMesh = null
+    routeMesh = null // keep it in scene, stop updating it
   }
 }
 
-function addRoutePoint(worldX, worldZ) {
-  const v = new THREE.Vector3(worldX, 0.05, worldZ)
-
-  const last = currentRoute[currentRoute.length - 1]
-  if (last && last.distanceToSquared(v) < 0.02) return
-
-  currentRoute.push(v)
-
+// Rebuild the tube mesh from currentRoute (performance throttled elsewhere)
+function rebuildRouteMesh() {
   if (currentRoute.length < 2) return
 
-  // Remove old tube
   if (routeMesh) {
     board.remove(routeMesh)
     routeMesh.geometry.dispose()
     routeMesh.material.dispose()
+    routeMesh = null
   }
 
-  // Create smooth curve through points
   const curve = new THREE.CatmullRomCurve3(currentRoute)
 
   const geometry = new THREE.TubeGeometry(
     curve,
-    Math.max(2, currentRoute.length * 4), // tubular segments
+    Math.max(8, currentRoute.length * 4), // segments along the curve
     ROUTE_RADIUS,
     ROUTE_SEGMENTS,
     false
   )
 
-  const material = new THREE.MeshBasicMaterial({
-    color: 0xFFA500,
-  })
-
+  const material = new THREE.MeshBasicMaterial({ color: ROUTE_COLOR })
   routeMesh = new THREE.Mesh(geometry, material)
   board.add(routeMesh)
 }
 
+// Adds a point (already in world coords) with spam prevention
+function addRoutePoint(worldX, worldZ) {
+  const v = new THREE.Vector3(worldX, 0.05, worldZ)
 
+  const last = currentRoute[currentRoute.length - 1]
+  if (last && last.distanceToSquared(v) < 0.02) return false
 
-let targetX = 0
-let targetZ = 0
+  currentRoute.push(v)
+  acceptedPointsSinceRebuild++
 
-// ----- Two-hand gesture state -----
-const PINCH_THRESH = 0.06 // tweak 0.04–0.08
+  // throttle rebuild
+  if (acceptedPointsSinceRebuild >= ROUTE_REBUILD_EVERY) {
+    acceptedPointsSinceRebuild = 0
+    rebuildRouteMesh()
+  }
+
+  return true
+}
+
+// -------------------- Gesture helpers --------------------
 let twoPinchActive = false
-
-let lastMid = null   // {x,y} normalized
-
-// Smooth + sensitivity
-const ROT_SENS = 3.0        // bigger = faster rotation
-const SMOOTH = 0.25         // 0..1 (higher = snappier, lower = smoother)
-
-// Prevent grid from going vertical (limit pitch)
-const MIN_PITCH = -0.9      // ~ -52 degrees
-const MAX_PITCH = 0.2       // ~ 11 degrees
-
-let smDx = 0  
+let lastMid = null // {x,y}
+let smDx = 0
 let smDy = 0
 
 function dist2(a, b) {
@@ -172,13 +198,32 @@ function dist2(a, b) {
 }
 
 function isPinching(handLm) {
-  const thumb = handLm[4] // thumb tip
-  const index = handLm[8] // index tip
+  const thumb = handLm[4]
+  const index = handLm[8]
   return dist2(thumb, index) < PINCH_THRESH * PINCH_THRESH
 }
 
+function setMode(next) {
+  const now = performance.now()
+  if (next !== mode) {
+    if (now - lastModeChange < MODE_COOLDOWN_MS) return false
+    mode = next
+    lastModeChange = now
+  }
+  return true
+}
+
+function angleDeg(a, b, c) {
+  // angle at b for a-b-c
+  const ab = a.clone().sub(b).normalize()
+  const cb = c.clone().sub(b).normalize()
+  const dot = THREE.MathUtils.clamp(ab.dot(cb), -1, 1)
+  return (Math.acos(dot) * 180) / Math.PI
+}
 
 // -------------------- 4) WebSocket input from Python --------------------
+let targetX = 0
+let targetZ = 0
 let usingWebSocket = false
 const ws = new WebSocket('ws://localhost:8765')
 
@@ -186,17 +231,14 @@ ws.addEventListener('open', () => {
   console.log('✅ WebSocket connected')
   usingWebSocket = true
 })
-
 ws.addEventListener('close', () => {
   console.log('❌ WebSocket closed')
   usingWebSocket = false
 })
-
 ws.addEventListener('error', () => {
   console.log('⚠️ WebSocket error (Python server not running?)')
   usingWebSocket = false
 })
-
 ws.addEventListener('message', (event) => {
   try {
     const msg = JSON.parse(event.data)
@@ -205,7 +247,6 @@ ws.addEventListener('message', (event) => {
     const nx = 1 - msg.x * 2
     const ny = 1 - msg.y * 2
 
-    // Map to grid X/Z
     targetX = nx * GRID_SCALE
     targetZ = -ny * GRID_SCALE
   } catch {}
@@ -220,7 +261,7 @@ window.addEventListener('mousemove', (e) => {
   targetZ = -ny * GRID_SCALE
 })
 
-// Grid rotation (mouse drag)
+// Mouse drag rotate (still allowed)
 let dragging = false
 let lastX = 0
 let lastY = 0
@@ -233,7 +274,7 @@ window.addEventListener('mousedown', (e) => {
 window.addEventListener('mouseup', () => (dragging = false))
 window.addEventListener('mousemove', (e) => {
   if (!dragging) return
-  if (twoPinchActive) return // don't conflict with pinch-rotate
+  if (mode === 'rotate') return
   const dx = e.clientX - lastX
   const dy = e.clientY - lastY
   lastX = e.clientX
@@ -251,7 +292,7 @@ function animate() {
 }
 animate()
 
-// -------------------- 5) MediaPipe Hands (Safari-safe local assets) --------------------
+// -------------------- 5) MediaPipe Hands --------------------
 const hands = new Hands({
   locateFile: (file) => `/mediapipe/hands/${file}`,
 })
@@ -264,12 +305,10 @@ hands.setOptions({
   selfieMode: true,
 })
 
-
 hands.onResults((results) => {
   ctx.clearRect(0, 0, overlay.width, overlay.height)
 
   const handsLm = results.multiHandLandmarks || []
-
   const lmA = handsLm[0]
   const lmB = handsLm.length > 1 ? handsLm[1] : null
 
@@ -280,6 +319,7 @@ hands.onResults((results) => {
     lastMid = null
     smDx = 0
     smDy = 0
+    setMode('none')
     return
   }
 
@@ -300,16 +340,19 @@ hands.onResults((results) => {
     lastMid = null
     smDx = 0
     smDy = 0
+    setMode('none')
     return
   }
 
   // -------- 2 pinches: ROTATE BOARD --------
   if (numPinching === 2) {
+    if (!setMode('rotate')) return
     endRoute()
+
     if (!lmB) return
 
     const a = lmA[8]
-    const b = lmB[8] // safe because pinchB implies lmB exists
+    const b = lmB[8]
 
     const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
 
@@ -324,8 +367,8 @@ hands.onResults((results) => {
     const dxMid = mid.x - lastMid.x
     const dyMid = mid.y - lastMid.y
 
-    smDx += (dxMid - smDx) * SMOOTH
-    smDy += (dyMid - smDy) * SMOOTH
+    smDx += (dxMid - smDx) * ROT_SMOOTH
+    smDy += (dyMid - smDy) * ROT_SMOOTH
 
     board.rotation.y -= smDx * ROT_SENS
     board.rotation.x += smDy * ROT_SENS
@@ -336,28 +379,68 @@ hands.onResults((results) => {
   }
 
   // -------- 1 pinch: DRAW ROUTE --------
+  if (!setMode('draw')) return
+
+  // reset rotate state so it doesn't bleed into drawing
   twoPinchActive = false
   lastMid = null
   smDx = 0
   smDy = 0
 
   const drawLm = pinchA ? lmA : lmB
-  if (!drawLm) return // extra safety
+  if (!drawLm) return
 
   const tip = drawLm[8]
 
+  // normalized -> world mapping
   const nx = 1 - tip.x * 2
   const ny = 1 - tip.y * 2
-
   const worldX = nx * GRID_SCALE
   const worldZ = -ny * GRID_SCALE
 
+  const raw = new THREE.Vector3(worldX, 0.05, worldZ)
+
+  // smooth finger position (EMA)
+  if (!drawSmoothPoint) drawSmoothPoint = raw.clone()
+  drawSmoothPoint.lerp(raw, 1 - DRAW_SMOOTH)
+
+  const sx = drawSmoothPoint.x
+  const sz = drawSmoothPoint.z
+
   if (!isDrawing) startRoute()
-  addRoutePoint(worldX, worldZ)
+
+  // min movement gate
+  const last = currentRoute[currentRoute.length - 1]
+  if (last && last.distanceTo(new THREE.Vector3(sx, 0.05, sz)) < DRAW_MIN_STEP) {
+    return
+  }
+
+  const added = addRoutePoint(sx, sz)
+  if (!added) return
+
+  // straightening: snap middle point if nearly collinear
+  if (currentRoute.length >= 3) {
+    const A = currentRoute[currentRoute.length - 3]
+    const B = currentRoute[currentRoute.length - 2]
+    const C = currentRoute[currentRoute.length - 1]
+
+    const ang = angleDeg(A, B, C)
+    if (ang > (180 - STRAIGHT_ANGLE_DEG)) {
+      const AC = C.clone().sub(A)
+      const t = THREE.MathUtils.clamp(
+        B.clone().sub(A).dot(AC) / AC.lengthSq(),
+        0,
+        1
+      )
+      const proj = A.clone().add(AC.multiplyScalar(t))
+      B.lerp(proj, STRAIGHT_SNAP)
+
+      // after snapping, rebuild so the mesh reflects the straightened point
+      rebuildRouteMesh()
+      acceptedPointsSinceRebuild = 0
+    }
+  }
 })
-
-
-
 
 // Feed frames to MediaPipe Hands (in-browser)
 const mpCamera = new Camera(video, {
