@@ -8,6 +8,9 @@ import { drawConnectors, drawLandmarks } from '@mediapipe/drawing_utils'
 
 // -------------------- TUNING --------------------
 const GRID_SCALE = 8
+const ROUTE_RADIUS = 0.08   // thickness of route
+const ROUTE_SEGMENTS = 8   // smoothness
+
 
 // -------------------- 1) Webcam video (DOM) --------------------
 const video = document.createElement('video')
@@ -42,6 +45,8 @@ resizeOverlay()
 
 // -------------------- 3) Three.js overlay (transparent) --------------------
 const scene = new THREE.Scene()
+const board = new THREE.Group()
+scene.add(board)
 
 const camera3d = new THREE.PerspectiveCamera(
   60,
@@ -62,14 +67,83 @@ camera3d.lookAt(0, 0, 0)
 const grid = new THREE.GridHelper(20, 40, 0x00ffff, 0x003344)
 grid.material.transparent = true
 grid.material.opacity = 0.55
-scene.add(grid)
+board.add(grid)
 
 const cursor = new THREE.Mesh(
   new THREE.SphereGeometry(0.18, 24, 24),
   new THREE.MeshBasicMaterial({ color: 0x00ffff })
 )
 cursor.position.set(0, 0.2, 0)
-scene.add(cursor)
+board.add(cursor)
+
+// ----- Route drawing state -----
+let isDrawing = false
+let currentRoute = [] // THREE.Vector3 points for the active route
+let routeMesh = null
+const routes = [] // optional: store finished routes
+
+function startRoute() {
+  isDrawing = true
+  currentRoute = []
+
+  // start a fresh line
+  if (routeMesh) {
+    board.remove(routeMesh)
+    routeMesh.geometry.dispose()
+    routeMesh.material.dispose()
+    routeMesh = null
+  }
+
+}
+
+function endRoute() {
+  if (!isDrawing) return
+  isDrawing = false
+
+  // keep the finished route (optional)
+  if (currentRoute.length >= 2 && routeMesh) {
+    routes.push({ points: currentRoute, mesh: routeMesh })
+    routeMesh = null
+  }
+}
+
+function addRoutePoint(worldX, worldZ) {
+  const v = new THREE.Vector3(worldX, 0.05, worldZ)
+
+  const last = currentRoute[currentRoute.length - 1]
+  if (last && last.distanceToSquared(v) < 0.02) return
+
+  currentRoute.push(v)
+
+  if (currentRoute.length < 2) return
+
+  // Remove old tube
+  if (routeMesh) {
+    board.remove(routeMesh)
+    routeMesh.geometry.dispose()
+    routeMesh.material.dispose()
+  }
+
+  // Create smooth curve through points
+  const curve = new THREE.CatmullRomCurve3(currentRoute)
+
+  const geometry = new THREE.TubeGeometry(
+    curve,
+    Math.max(2, currentRoute.length * 4), // tubular segments
+    ROUTE_RADIUS,
+    ROUTE_SEGMENTS,
+    false
+  )
+
+  const material = new THREE.MeshBasicMaterial({
+    color: 0xFFA500,
+  })
+
+  routeMesh = new THREE.Mesh(geometry, material)
+  board.add(routeMesh)
+}
+
+
 
 let targetX = 0
 let targetZ = 0
@@ -164,8 +238,8 @@ window.addEventListener('mousemove', (e) => {
   const dy = e.clientY - lastY
   lastX = e.clientX
   lastY = e.clientY
-  grid.rotation.y += dx * 0.005
-  grid.rotation.x += dy * 0.005
+  board.rotation.y += dx * 0.005
+  board.rotation.x += dy * 0.005
 })
 
 // Animate 3D
@@ -195,14 +269,19 @@ hands.onResults((results) => {
   ctx.clearRect(0, 0, overlay.width, overlay.height)
 
   const handsLm = results.multiHandLandmarks || []
-  if (handsLm.length === 0) {
-  twoPinchActive = false
-  lastMid = null
-  smDx = 0
-  smDy = 0
-  return
-}
 
+  const lmA = handsLm[0]
+  const lmB = handsLm.length > 1 ? handsLm[1] : null
+
+  // ---- SAFE GUARD: no hands ----
+  if (!lmA) {
+    endRoute()
+    twoPinchActive = false
+    lastMid = null
+    smDx = 0
+    smDy = 0
+    return
+  }
 
   // Draw all detected hands
   for (const lm of handsLm) {
@@ -210,63 +289,73 @@ hands.onResults((results) => {
     drawLandmarks(ctx, lm, { radius: 6 })
   }
 
-  // Need 2 hands
-  if (handsLm.length < 2) {
-  twoPinchActive = false
-  lastMid = null
-  smDx = 0
-  smDy = 0
-  return
-}
-
-
-  const lmA = handsLm[0]
-  const lmB = handsLm[1]
-
   const pinchA = isPinching(lmA)
-  const pinchB = isPinching(lmB)
+  const pinchB = lmB ? isPinching(lmB) : false
+  const numPinching = (pinchA ? 1 : 0) + (pinchB ? 1 : 0)
 
-  // Only rotate when BOTH are pinching
-  if (!(pinchA && pinchB)) {
+  // -------- 0 pinches: stop everything --------
+  if (numPinching === 0) {
+    endRoute()
+    twoPinchActive = false
+    lastMid = null
+    smDx = 0
+    smDy = 0
+    return
+  }
+
+  // -------- 2 pinches: ROTATE BOARD --------
+  if (numPinching === 2) {
+    endRoute()
+    if (!lmB) return
+
+    const a = lmA[8]
+    const b = lmB[8] // safe because pinchB implies lmB exists
+
+    const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
+
+    if (!twoPinchActive) {
+      twoPinchActive = true
+      lastMid = mid
+      smDx = 0
+      smDy = 0
+      return
+    }
+
+    const dxMid = mid.x - lastMid.x
+    const dyMid = mid.y - lastMid.y
+
+    smDx += (dxMid - smDx) * SMOOTH
+    smDy += (dyMid - smDy) * SMOOTH
+
+    board.rotation.y -= smDx * ROT_SENS
+    board.rotation.x += smDy * ROT_SENS
+    board.rotation.x = Math.max(MIN_PITCH, Math.min(MAX_PITCH, board.rotation.x))
+
+    lastMid = mid
+    return
+  }
+
+  // -------- 1 pinch: DRAW ROUTE --------
   twoPinchActive = false
   lastMid = null
   smDx = 0
   smDy = 0
-  return
-}
 
+  const drawLm = pinchA ? lmA : lmB
+  if (!drawLm) return // extra safety
 
-  const a = lmA[8] // index tip
-  const b = lmB[8]
+  const tip = drawLm[8]
 
-  const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
+  const nx = 1 - tip.x * 2
+  const ny = 1 - tip.y * 2
 
-if (!twoPinchActive) {
-  twoPinchActive = true
-  lastMid = mid
-  smDx = 0
-  smDy = 0
-  return
-}
+  const worldX = nx * GRID_SCALE
+  const worldZ = -ny * GRID_SCALE
 
-
-// Midpoint delta (normalized units)
-const dxMid = mid.x - lastMid.x
-const dyMid = mid.y - lastMid.y
-
-// Low-pass filter for smoothness
-smDx += (dxMid - smDx) * SMOOTH
-smDy += (dyMid - smDy) * SMOOTH
-
-// Map midpoint motion -> rotation (diagonal is naturally seamless)
-grid.rotation.y -= smDx * ROT_SENS  // horizontal drag => yaw
-grid.rotation.x += smDy * ROT_SENS  // vertical drag   => pitch
-
-// Clamp pitch so grid never goes vertical
-grid.rotation.x = Math.max(MIN_PITCH, Math.min(MAX_PITCH, grid.rotation.x))
-
-lastMid = mid
+  if (!isDrawing) startRoute()
+  addRoutePoint(worldX, worldZ)
 })
+
 
 
 
