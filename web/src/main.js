@@ -29,6 +29,9 @@ const MAX_PITCH = 0.2
 let mode = 'none' // 'none' | 'rotate' | 'draw'
 let lastModeChange = 0
 const MODE_COOLDOWN_MS = 180
+let mustReleaseBeforeDraw = false
+let lastRotateTime = 0
+const ROTATE_TO_DRAW_BLOCK_MS = 250 // tweak: 150–400 feels good
 
 // Drawing smoothing / filtering
 const DRAW_SMOOTH = 0.35    // 0..1 higher = smoother
@@ -687,12 +690,17 @@ hands.onResults((results) => {
     smDx = 0
     smDy = 0
     setMode('none')
+    mustReleaseBeforeDraw = false
     return
   }
 
   // -------- 2 pinches: ROTATE BOARD --------
   if (numPinching === 2) {
     if (!setMode('rotate')) return
+    
+    mustReleaseBeforeDraw = true
+    lastRotateTime = performance.now()
+
     endRoute()
 
     if (!lmB) return
@@ -724,7 +732,16 @@ hands.onResults((results) => {
   }
 
   // -------- 1 pinch: DRAW ROUTE --------
+  // Prevent accidental draw when coming out of rotate.
+  // Requires a full release OR waiting a short time.
+  const now = performance.now()
+  if (mustReleaseBeforeDraw && (now - lastRotateTime) < ROTATE_TO_DRAW_BLOCK_MS) {
+    return
+  }
+
   if (!setMode('draw')) return
+
+  mustReleaseBeforeDraw = false
 
   // reset rotate state so it doesn't bleed into drawing
   twoPinchActive = false
