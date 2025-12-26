@@ -31,7 +31,7 @@ let lastModeChange = 0
 const MODE_COOLDOWN_MS = 180
 let mustReleaseBeforeDraw = false
 let lastRotateTime = 0
-const ROTATE_TO_DRAW_BLOCK_MS = 250 // tweak: 150–400 feels good
+const ROTATE_TO_DRAW_BLOCK_MS = 400 // tweak: 150–400 feels good
 
 // Drawing smoothing / filtering
 const DRAW_SMOOTH = 0.35    // 0..1 higher = smoother
@@ -88,6 +88,20 @@ const FIELD = {
   ROUTE_Y: 0.05,
 }
 
+// -------------------- GOAL POSTS --------------------
+const GOALPOST = {
+  SHOW: true,
+  HEIGHT: 2.8,        // how tall the uprights are
+  WIDTH: 1.8,         // distance between uprights
+  BAR_HEIGHT: 0.9,    // height of the crossbar from ground
+  THICKNESS: 0.06,    // tube thickness
+  COLOR: 0x7ffcff,    // holographic cyan
+  ALPHA: 0.65,        // transparency
+  Z_OFFSET: 0.0,      // shift toward near/far sideline if needed
+  INSET: 0.15,        // pull posts slightly inside from the exact line
+}
+
+
 // -------------------- 1) Webcam video (DOM) --------------------
 const video = document.createElement('video')
 video.id = 'bg-video'
@@ -139,7 +153,7 @@ camera3d.position.set(0, 8, 12)
 camera3d.lookAt(0, 0, 0)
 
 // -------------------- Ray -> Board plane mapping (FIXES ROTATION DRAW/CURSOR) --------------------
-// We take a screen point (NDC), raycast from the 3D camera, intersect the rotated board plane,
+// take a screen point and raycast from the 3D camera, intersect the rotated board plane,
 // then convert the hit into board-LOCAL coords. Cursor + drawing use those local coords.
 const raycaster = new THREE.Raycaster()
 const _tmpQuat = new THREE.Quaternion()
@@ -165,7 +179,7 @@ function boardPointFromNDC(ndcX, ndcY) {
   return board.worldToLocal(hit.clone())
 }
 
-// Input is stored as NDC, and we compute board-local targetX/targetZ each frame.
+// Input is stored as NDC, compute board-local targetX/targetZ each frame.
 let inputNdcX = 0
 let inputNdcY = 0
 
@@ -435,6 +449,63 @@ fieldGlow.rotation.x = -Math.PI / 2
 fieldGlow.position.y = FIELD.Y + 0.002
 board.add(fieldGlow)
 
+//--------------------- Goal posts --------------------
+
+function addGoalPosts() {
+  if (!GOALPOST.SHOW) return
+
+  const mat = new THREE.MeshBasicMaterial({
+    color: 0xfff07a,          // holographic yellow
+    transparent: true,
+    opacity: 0.7,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  })
+
+  const cyl = (h) => new THREE.CylinderGeometry(GOALPOST.THICKNESS, GOALPOST.THICKNESS, h, 12)
+
+  const makeOne = (x) => {
+    const g = new THREE.Group()
+
+    // Crossbar should run ACROSS the field width (Z axis).
+    // Cylinder defaults along Y, so rotate around X to align with Z.
+    const cross = new THREE.Mesh(cyl(GOALPOST.WIDTH), mat)
+    cross.rotation.x = Math.PI / 2
+    cross.position.set(0, GOALPOST.BAR_HEIGHT, 0)
+    g.add(cross)
+
+    // Uprights go up in Y, positioned at +/- WIDTH/2 along Z
+    const u1 = new THREE.Mesh(cyl(GOALPOST.HEIGHT), mat)
+    u1.position.set(0, GOALPOST.BAR_HEIGHT + GOALPOST.HEIGHT / 2, -GOALPOST.WIDTH / 2)
+    g.add(u1)
+
+    const u2 = new THREE.Mesh(cyl(GOALPOST.HEIGHT), mat)
+    u2.position.set(0, GOALPOST.BAR_HEIGHT + GOALPOST.HEIGHT / 2, GOALPOST.WIDTH / 2)
+    g.add(u2)
+
+    // Base pole
+    const base = new THREE.Mesh(cyl(GOALPOST.BAR_HEIGHT), mat)
+    base.position.set(0, GOALPOST.BAR_HEIGHT / 2, 0)
+    g.add(base)
+
+    // Put the whole goalpost at the end line (back of end zone)
+    g.position.set(x, 0, GOALPOST.Z_OFFSET)
+    return g
+  }
+
+  // Field runs along X. End lines are at x = +/- FIELD.W/2.
+  // inset slightly so it doesn't clip the field border.
+  const xLeftEndLine  = -FIELD.W / 2 + GOALPOST.INSET
+  const xRightEndLine =  FIELD.W / 2 - GOALPOST.INSET
+
+  board.add(makeOne(xLeftEndLine))
+  board.add(makeOne(xRightEndLine))
+}
+
+
+addGoalPosts()
+
+
 // -------------------- Cursor --------------------
 const cursor = new THREE.Mesh(
   new THREE.SphereGeometry(0.18, 24, 24),
@@ -608,7 +679,7 @@ window.addEventListener('mousemove', (e) => {
   const dy = e.clientY - lastY
   lastX = e.clientX
   lastY = e.clientY
-  board.rotation.y += dx * 0.005
+  board.rotation.y -= dx * 0.005
   board.rotation.x += dy * 0.005
 })
 
