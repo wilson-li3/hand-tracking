@@ -44,6 +44,13 @@ const STRAIGHT_SNAP = 0.6     // 0..1 how hard to snap
 // Tube perf
 const ROUTE_REBUILD_EVERY = 3 // rebuild tube every N accepted points
 
+// -------------------- ERASE (FIST) (TWEAK ME) --------------------
+const ERASE = {
+  ENABLED: true,
+  HOVER_RADIUS: 0.7,   // <-- tweak: 0.4–1.2 (bigger = easier to erase)
+  COOLDOWN_MS: 180,    // rate-limit erasing
+}
+
 // -------------------- RETRO HOLO FIELD (TWEAK ME) --------------------
 const FIELD = {
   SIZE: 20,
@@ -101,7 +108,6 @@ const GOALPOST = {
   INSET: 0.15,        // pull posts slightly inside from the exact line
 }
 
-
 // -------------------- 1) Webcam video (DOM) --------------------
 const video = document.createElement('video')
 video.id = 'bg-video'
@@ -152,9 +158,7 @@ document.body.appendChild(renderer.domElement)
 camera3d.position.set(0, 8, 12)
 camera3d.lookAt(0, 0, 0)
 
-// -------------------- Ray -> Board plane mapping (FIXES ROTATION DRAW/CURSOR) --------------------
-// take a screen point and raycast from the 3D camera, intersect the rotated board plane,
-// then convert the hit into board-LOCAL coords. Cursor + drawing use those local coords.
+// -------------------- Ray -> Board plane mapping --------------------
 const raycaster = new THREE.Raycaster()
 const _tmpQuat = new THREE.Quaternion()
 const _tmpPos = new THREE.Vector3()
@@ -168,18 +172,16 @@ function boardPointFromNDC(ndcX, ndcY) {
   board.getWorldQuaternion(_tmpQuat)
   board.getWorldPosition(_tmpPos)
 
-  // board local up is (0,1,0) for its XZ plane; rotate that into world
   _tmpN.set(0, 1, 0).applyQuaternion(_tmpQuat).normalize()
   _tmpPlane.setFromNormalAndCoplanarPoint(_tmpN, _tmpPos)
 
   const hit = raycaster.ray.intersectPlane(_tmpPlane, _tmpHit)
   if (!hit) return null
 
-  // world -> board local
   return board.worldToLocal(hit.clone())
 }
 
-// Input is stored as NDC, compute board-local targetX/targetZ each frame.
+// Input is stored as NDC
 let inputNdcX = 0
 let inputNdcY = 0
 
@@ -199,11 +201,9 @@ function makeRetroFieldTexture() {
   c.height = H
   const g = c.getContext('2d')
 
-  // ---- grass base ----
   g.fillStyle = '#1e6f33'
   g.fillRect(0, 0, W, H)
 
-  // mowing stripes (bands)
   const stripeW = Math.floor(W / 12)
   for (let i = 0; i < 12; i++) {
     if (i % 2 === 0) continue
@@ -211,7 +211,6 @@ function makeRetroFieldTexture() {
     g.fillRect(i * stripeW, 0, stripeW, H)
   }
 
-  // grass grain
   for (let i = 0; i < 45000; i++) {
     const x = (Math.random() * W) | 0
     const y = (Math.random() * H) | 0
@@ -227,7 +226,6 @@ function makeRetroFieldTexture() {
     g.fillRect(x, y, 1, 1)
   }
 
-  // ---- field bounds (leave margins) ----
   const marginX = Math.floor(W * 0.03)
   const marginY = Math.floor(H * 0.10)
   const fx0 = marginX
@@ -258,13 +256,11 @@ function makeRetroFieldTexture() {
     g.restore()
   }
 
-  // outer border
   line(fx0, fz0, fx1, fz0, FIELD.LINE_THICK + 1, FIELD.LINE_ALPHA)
   line(fx0, fz1, fx1, fz1, FIELD.LINE_THICK + 1, FIELD.LINE_ALPHA)
   line(fx0, fz0, fx0, fz1, FIELD.LINE_THICK + 1, FIELD.LINE_ALPHA)
   line(fx1, fz0, fx1, fz1, FIELD.LINE_THICK + 1, FIELD.LINE_ALPHA)
 
-  // yard model: [endzone 10y] + [playfield 100y] + [endzone 10y] = 120y
   const totalYards = FIELD.PLAY_YARDS + 2 * FIELD.ENDZONE_YARDS
   const pxPerYard = fieldWpx / totalYards
 
@@ -272,22 +268,18 @@ function makeRetroFieldTexture() {
   const playStartX = fx0 + ezPx
   const playEndX = fx1 - ezPx
 
-  // end zones on LEFT/RIGHT
   if (FIELD.SHOW_ENDZONES) {
     fillRectAlpha(fx0, fz0, ezPx, fieldLpx, FIELD.ENDZONE_BG, 0.9)
     fillRectAlpha(fx1 - ezPx, fz0, ezPx, fieldLpx, FIELD.ENDZONE_BG, 0.9)
 
-    // endzone text (centered, spaced, wider; mirror right end to avoid backwards)
     const drawEndzoneText = (cx, cy, rotation, mirror = false) => {
       g.save()
       g.translate(cx, cy)
       g.rotate(rotation)
 
-      // ---- TWEAKS ----
-      const EZ_FONT_SIZE = 110 * (FIELD.NUMBER_SCALE / 0.6) // scale with your number scale
+      const EZ_FONT_SIZE = 110 * (FIELD.NUMBER_SCALE / 0.6)
       const EZ_WIDTH_SCALE = 1.25
       const EZ_LETTER_SPACING = 18
-      // ---------------
 
       g.scale(mirror ? -EZ_WIDTH_SCALE : EZ_WIDTH_SCALE, 1)
 
@@ -299,7 +291,6 @@ function makeRetroFieldTexture() {
 
       const text = FIELD.ENDZONE_TEXT
 
-      // measure total width incl spacing (for proper centering)
       let total = 0
       for (let i = 0; i < text.length; i++) {
         total += g.measureText(text[i]).width
@@ -317,14 +308,12 @@ function makeRetroFieldTexture() {
     }
 
     drawEndzoneText(fx0 + ezPx / 2, fz0 + fieldLpx / 2, -Math.PI / 2, false)
-    drawEndzoneText(fx1 - ezPx / 2, fz0 + fieldLpx / 2,  Math.PI / 2, true)
+    drawEndzoneText(fx1 - ezPx / 2, fz0 + fieldLpx / 2, Math.PI / 2, true)
   }
 
-  // goal lines
   line(playStartX, fz0, playStartX, fz1, FIELD.LINE_THICK + 1, 0.95)
   line(playEndX, fz0, playEndX, fz1, FIELD.LINE_THICK + 1, 0.95)
 
-  // yard lines every 5y, brighter every 10y on playfield
   for (let yds = 0; yds <= FIELD.PLAY_YARDS; yds += 5) {
     const x = playStartX + yds * pxPerYard
     const is10 = yds % 10 === 0
@@ -333,7 +322,6 @@ function makeRetroFieldTexture() {
     line(x, fz0, x, fz1, thick, alpha)
   }
 
-  // sideline ticks (top/bottom)
   for (let yd = 0; yd <= totalYards; yd += 1) {
     const x = fx0 + yd * pxPerYard
     const isMajor = yd % 5 === 0
@@ -342,7 +330,6 @@ function makeRetroFieldTexture() {
     line(x, fz1, x, fz1 - len, isMajor ? 3 : 2, 0.75)
   }
 
-  // hash marks (two rows) on playfield
   const hashZ1 = fz0 + fieldLpx * 0.42
   const hashZ2 = fz0 + fieldLpx * 0.58
   for (let yds = 0; yds <= FIELD.PLAY_YARDS; yds += 1) {
@@ -365,7 +352,6 @@ function makeRetroFieldTexture() {
     g.restore()
   }
 
-  // numbers on playfield (10..50..10)
   if (FIELD.SHOW_NUMBERS) {
     const yTop = fz0 + fieldLpx * 0.18
     const yBot = fz0 + fieldLpx * 0.88
@@ -392,7 +378,6 @@ function makeRetroFieldTexture() {
     }
   }
 
-  // emphasize 50
   {
     const x50 = playStartX + 50 * pxPerYard
     line(x50, fz0, x50, fz1, FIELD.LINE_THICK + 2, 0.95)
@@ -407,7 +392,7 @@ function makeRetroFieldTexture() {
   return tex
 }
 
-// 1) Holographic grid overlay
+// grid overlay
 const grid = new THREE.GridHelper(FIELD.SIZE, 40, 0x00ffff, 0x003344)
 grid.material.transparent = true
 grid.material.opacity = 0.38
@@ -415,25 +400,20 @@ grid.material.depthWrite = false
 grid.material.blending = THREE.AdditiveBlending
 board.add(grid)
 
-// 2) Retro field plane
+// field plane
 const fieldTex = makeRetroFieldTexture()
-
 const fieldMat = new THREE.MeshBasicMaterial({
   map: fieldTex,
   transparent: true,
   opacity: FIELD.HOLO ? FIELD.HOLO_ALPHA : 1.0,
   depthWrite: false,
 })
-
-const fieldPlane = new THREE.Mesh(
-  new THREE.PlaneGeometry(FIELD.W, FIELD.L),
-  fieldMat
-)
+const fieldPlane = new THREE.Mesh(new THREE.PlaneGeometry(FIELD.W, FIELD.L), fieldMat)
 fieldPlane.rotation.x = -Math.PI / 2
 fieldPlane.position.y = FIELD.Y
 board.add(fieldPlane)
 
-// Optional glow plane
+// glow plane
 const glowMat = new THREE.MeshBasicMaterial({
   map: fieldTex,
   transparent: true,
@@ -441,21 +421,17 @@ const glowMat = new THREE.MeshBasicMaterial({
   depthWrite: false,
   blending: THREE.AdditiveBlending,
 })
-const fieldGlow = new THREE.Mesh(
-  new THREE.PlaneGeometry(FIELD.W, FIELD.L),
-  glowMat
-)
+const fieldGlow = new THREE.Mesh(new THREE.PlaneGeometry(FIELD.W, FIELD.L), glowMat)
 fieldGlow.rotation.x = -Math.PI / 2
 fieldGlow.position.y = FIELD.Y + 0.002
 board.add(fieldGlow)
 
-//--------------------- Goal posts --------------------
-
+// goal posts
 function addGoalPosts() {
   if (!GOALPOST.SHOW) return
 
   const mat = new THREE.MeshBasicMaterial({
-    color: 0xfff07a,          // holographic yellow
+    color: 0xfff07a,
     transparent: true,
     opacity: 0.7,
     depthWrite: false,
@@ -467,14 +443,11 @@ function addGoalPosts() {
   const makeOne = (x) => {
     const g = new THREE.Group()
 
-    // Crossbar should run ACROSS the field width (Z axis).
-    // Cylinder defaults along Y, so rotate around X to align with Z.
     const cross = new THREE.Mesh(cyl(GOALPOST.WIDTH), mat)
     cross.rotation.x = Math.PI / 2
     cross.position.set(0, GOALPOST.BAR_HEIGHT, 0)
     g.add(cross)
 
-    // Uprights go up in Y, positioned at +/- WIDTH/2 along Z
     const u1 = new THREE.Mesh(cyl(GOALPOST.HEIGHT), mat)
     u1.position.set(0, GOALPOST.BAR_HEIGHT + GOALPOST.HEIGHT / 2, -GOALPOST.WIDTH / 2)
     g.add(u1)
@@ -483,30 +456,23 @@ function addGoalPosts() {
     u2.position.set(0, GOALPOST.BAR_HEIGHT + GOALPOST.HEIGHT / 2, GOALPOST.WIDTH / 2)
     g.add(u2)
 
-    // Base pole
     const base = new THREE.Mesh(cyl(GOALPOST.BAR_HEIGHT), mat)
     base.position.set(0, GOALPOST.BAR_HEIGHT / 2, 0)
     g.add(base)
 
-    // Put the whole goalpost at the end line (back of end zone)
     g.position.set(x, 0, GOALPOST.Z_OFFSET)
     return g
   }
 
-  // Field runs along X. End lines are at x = +/- FIELD.W/2.
-  // inset slightly so it doesn't clip the field border.
-  const xLeftEndLine  = -FIELD.W / 2 + GOALPOST.INSET
-  const xRightEndLine =  FIELD.W / 2 - GOALPOST.INSET
+  const xLeftEndLine = -FIELD.W / 2 + GOALPOST.INSET
+  const xRightEndLine = FIELD.W / 2 - GOALPOST.INSET
 
   board.add(makeOne(xLeftEndLine))
   board.add(makeOne(xRightEndLine))
 }
-
-
 addGoalPosts()
 
-
-// -------------------- Cursor --------------------
+// cursor
 const cursor = new THREE.Mesh(
   new THREE.SphereGeometry(0.18, 24, 24),
   new THREE.MeshBasicMaterial({ color: 0x00ffff })
@@ -598,6 +564,50 @@ let lastMid = null // {x,y}
 let smDx = 0
 let smDy = 0
 
+// -------------------- FIST DETECTION--------------------
+const FIST_RATIO = 0.95 // try 0.85–1.15
+
+function dist3(a, b) {
+  const dx = a.x - b.x
+  const dy = a.y - b.y
+  const dz = (a.z ?? 0) - (b.z ?? 0)
+  return Math.sqrt(dx * dx + dy * dy + dz * dz)
+}
+
+function isFist(lm) {
+  if (!lm) return false
+
+  // Palm center: wrist + MCP knuckles
+  const palmIdx = [0, 5, 9, 13, 17]
+  let cx = 0, cy = 0, cz = 0
+  for (const i of palmIdx) {
+    cx += lm[i].x
+    cy += lm[i].y
+    cz += (lm[i].z ?? 0)
+  }
+  cx /= palmIdx.length
+  cy /= palmIdx.length
+  cz /= palmIdx.length
+  const palm = { x: cx, y: cy, z: cz }
+
+  // Hand scale: palm width (index MCP to pinky MCP)
+  const palmWidth = dist3(lm[5], lm[17])
+  if (palmWidth < 1e-6) return false
+
+  // Fingertip cluster near palm in a fist
+  const tips = [8, 12, 16, 20]
+  let closed = 0
+  for (const t of tips) {
+    const d = dist3(lm[t], palm)
+    if (d < FIST_RATIO * palmWidth) closed++
+  }
+
+  // Thumb also tends to tuck
+  const thumbClosed = dist3(lm[4], palm) < (FIST_RATIO * 1.15) * palmWidth
+
+  return closed >= 3 && thumbClosed
+}
+
 function dist2(a, b) {
   const dx = a.x - b.x
   const dy = a.y - b.y
@@ -627,28 +637,97 @@ function angleDeg(a, b, c) {
   return (Math.acos(dot) * 180) / Math.PI
 }
 
+// -------------------- ERASE IMPLEMENTATION --------------------
+let lastEraseTime = 0
+
+function distPointSegSqXZ(px, pz, ax, az, bx, bz) {
+  const abx = bx - ax
+  const abz = bz - az
+  const apx = px - ax
+  const apz = pz - az
+  const abLenSq = abx * abx + abz * abz
+
+  if (abLenSq === 0) {
+    const dx = px - ax
+    const dz = pz - az
+    return dx * dx + dz * dz
+  }
+
+  let t = (apx * abx + apz * abz) / abLenSq
+  t = Math.max(0, Math.min(1, t))
+  const cx = ax + t * abx
+  const cz = az + t * abz
+  const dx = px - cx
+  const dz = pz - cz
+  return dx * dx + dz * dz
+}
+
+function eraseRouteAt(localPoint) {
+  if (!ERASE.ENABLED) return false
+
+  const now = performance.now()
+  if (now - lastEraseTime < ERASE.COOLDOWN_MS) return false
+  if (!routes.length) return false
+
+  const px = localPoint.x
+  const pz = localPoint.z
+  const r2 = ERASE.HOVER_RADIUS * ERASE.HOVER_RADIUS
+
+  let bestIdx = -1
+  let bestD2 = Infinity
+
+  for (let i = 0; i < routes.length; i++) {
+    const pts = routes[i].points
+    if (!pts || pts.length < 2) continue
+
+    let minD2 = Infinity
+    for (let j = 0; j < pts.length - 1; j++) {
+      const A = pts[j]
+      const B = pts[j + 1]
+      const d2 = distPointSegSqXZ(px, pz, A.x, A.z, B.x, B.z)
+      if (d2 < minD2) minD2 = d2
+      if (minD2 <= r2) break
+    }
+
+    if (minD2 <= r2 && minD2 < bestD2) {
+      bestD2 = minD2
+      bestIdx = i
+    }
+  }
+
+  if (bestIdx === -1) return false
+
+  const doomed = routes[bestIdx]
+  if (doomed.mesh) {
+    board.remove(doomed.mesh)
+    doomed.mesh.geometry?.dispose()
+    doomed.mesh.material?.dispose()
+  }
+  routes.splice(bestIdx, 1)
+
+  lastEraseTime = now
+  return true
+}
+
 // -------------------- 4) WebSocket input from Python --------------------
 const ws = new WebSocket('ws://localhost:8765')
 
 ws.addEventListener('open', () => {
-  console.log('✅ WebSocket connected')
+  console.log('WebSocket connected')
   usingWebSocket = true
 })
 ws.addEventListener('close', () => {
-  console.log('❌ WebSocket closed')
+  console.log('WebSocket closed')
   usingWebSocket = false
 })
 ws.addEventListener('error', () => {
-  console.log('⚠️ WebSocket error (Python server not running?)')
+  console.log('WebSocket error (Python server not running?)')
   usingWebSocket = false
 })
 
 ws.addEventListener('message', (event) => {
   try {
     const msg = JSON.parse(event.data)
-
-    // msg.x/msg.y are normalized [0..1]
-    // Convert to NDC [-1..1] (match your prior mirroring feel)
     inputNdcX = 1 - msg.x * 2
     inputNdcY = 1 - msg.y * 2
   } catch {}
@@ -661,7 +740,7 @@ window.addEventListener('mousemove', (e) => {
   inputNdcY = -(e.clientY / window.innerHeight) * 2 + 1
 })
 
-// Mouse drag rotate (still allowed)
+// Mouse drag rotate
 let dragging = false
 let lastX = 0
 let lastY = 0
@@ -683,15 +762,13 @@ window.addEventListener('mousemove', (e) => {
   board.rotation.x += dy * 0.005
 })
 
-// Animate 3D
+// Animate
 function animate() {
   requestAnimationFrame(animate)
 
-  // shimmer
   const t = performance.now() * 0.001
   grid.material.opacity = 0.33 + 0.06 * (0.5 + 0.5 * Math.sin(t * 1.3))
 
-  // rotation-correct cursor mapping: NDC -> ray -> rotated board plane -> board-local
   const p = boardPointFromNDC(inputNdcX, inputNdcY)
   if (p) {
     targetX = p.x
@@ -725,7 +802,6 @@ hands.onResults((results) => {
   const lmA = handsLm[0]
   const lmB = handsLm.length > 1 ? handsLm[1] : null
 
-  // ---- SAFE GUARD: no hands ----
   if (!lmA) {
     endRoute()
     twoPinchActive = false
@@ -733,27 +809,62 @@ hands.onResults((results) => {
     smDx = 0
     smDy = 0
     setMode('none')
+    cursor.material.color.setHex(0x00ffff)
     return
   }
 
-  // Draw all detected hands
   for (const lm of handsLm) {
     drawConnectors(ctx, lm, HAND_CONNECTIONS, { lineWidth: 4 })
     drawLandmarks(ctx, lm, { radius: 6 })
   }
 
-  // If not using Python WS, let the hand drive the cursor mapping too
+  // hand drives cursor when not WS
   if (!usingWebSocket) {
     const t = lmA[8]
     inputNdcX = 1 - t.x * 2
     inputNdcY = 1 - t.y * 2
   }
 
+  // -------------------- FIST ERASE MODE --------------------
+  const fistClosed = isFist(lmA) || (lmB ? isFist(lmB) : false)
+
+  if (fistClosed) {
+    cursor.material.color.setHex(0xfff07a)
+
+    // stop any in-progress drawing
+    endRoute()
+
+    // use lmA index tip as eraser pointer
+    const tip = lmA[8]
+    const ndcX = 1 - tip.x * 2
+    const ndcY = 1 - tip.y * 2
+    inputNdcX = ndcX
+    inputNdcY = ndcY
+
+    const hit = boardPointFromNDC(ndcX, ndcY)
+    if (hit) {
+      targetX = hit.x
+      targetZ = hit.z
+      cursor.position.x = hit.x
+      cursor.position.z = hit.z
+      eraseRouteAt(hit)
+    }
+
+    setMode('none')
+    mustReleaseBeforeDraw = false
+    twoPinchActive = false
+    lastMid = null
+    smDx = 0
+    smDy = 0
+    return
+  } else {
+    cursor.material.color.setHex(0x00ffff)
+  }
+
   const pinchA = isPinching(lmA)
   const pinchB = lmB ? isPinching(lmB) : false
   const numPinching = (pinchA ? 1 : 0) + (pinchB ? 1 : 0)
 
-  // -------- 0 pinches: stop everything --------
   if (numPinching === 0) {
     endRoute()
     twoPinchActive = false
@@ -765,10 +876,9 @@ hands.onResults((results) => {
     return
   }
 
-  // -------- 2 pinches: ROTATE BOARD --------
   if (numPinching === 2) {
     if (!setMode('rotate')) return
-    
+
     mustReleaseBeforeDraw = true
     lastRotateTime = performance.now()
 
@@ -802,19 +912,12 @@ hands.onResults((results) => {
     return
   }
 
-  // -------- 1 pinch: DRAW ROUTE --------
-  // Prevent accidental draw when coming out of rotate.
-  // Requires a full release OR waiting a short time.
+  // 1 pinch: draw
   const now = performance.now()
-  if (mustReleaseBeforeDraw && (now - lastRotateTime) < ROTATE_TO_DRAW_BLOCK_MS) {
-    return
-  }
-
+  if (mustReleaseBeforeDraw && (now - lastRotateTime) < ROTATE_TO_DRAW_BLOCK_MS) return
   if (!setMode('draw')) return
-
   mustReleaseBeforeDraw = false
 
-  // reset rotate state so it doesn't bleed into drawing
   twoPinchActive = false
   lastMid = null
   smDx = 0
@@ -824,18 +927,14 @@ hands.onResults((results) => {
   if (!drawLm) return
 
   const tip = drawLm[8]
-
-  // normalized -> NDC
   const ndcX = 1 - tip.x * 2
   const ndcY = 1 - tip.y * 2
 
-  // NDC -> rotated board plane -> board-local
   const hit = boardPointFromNDC(ndcX, ndcY)
   if (!hit) return
 
   const raw = new THREE.Vector3(hit.x, FIELD.ROUTE_Y, hit.z)
 
-  // smooth finger position (EMA) in BOARD-LOCAL space
   if (!drawSmoothPoint) drawSmoothPoint = raw.clone()
   drawSmoothPoint.lerp(raw, 1 - DRAW_SMOOTH)
 
@@ -844,16 +943,12 @@ hands.onResults((results) => {
 
   if (!isDrawing) startRoute()
 
-  // min movement gate
   const last = currentRoute[currentRoute.length - 1]
-  if (last && last.distanceTo(new THREE.Vector3(sx, FIELD.ROUTE_Y, sz)) < DRAW_MIN_STEP) {
-    return
-  }
+  if (last && last.distanceTo(new THREE.Vector3(sx, FIELD.ROUTE_Y, sz)) < DRAW_MIN_STEP) return
 
   const added = addRoutePoint(sx, sz)
   if (!added) return
 
-  // straightening: snap middle point if nearly collinear
   if (currentRoute.length >= 3) {
     const A = currentRoute[currentRoute.length - 3]
     const B = currentRoute[currentRoute.length - 2]
@@ -876,7 +971,7 @@ hands.onResults((results) => {
   }
 })
 
-// Feed frames to MediaPipe Hands (in-browser)
+// Feed frames to MediaPipe Hands
 const mpCamera = new Camera(video, {
   onFrame: async () => {
     try {
@@ -890,7 +985,7 @@ const mpCamera = new Camera(video, {
 })
 mpCamera.start()
 
-// -------------------- Resize --------------------
+// Resize
 window.addEventListener('resize', () => {
   camera3d.aspect = window.innerWidth / window.innerHeight
   camera3d.updateProjectionMatrix()
