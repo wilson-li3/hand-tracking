@@ -44,14 +44,22 @@ const STRAIGHT_SNAP = 0.6     // 0..1 how hard to snap
 // Tube perf
 const ROUTE_REBUILD_EVERY = 3 // rebuild tube every N accepted points
 
-// -------------------- ERASE (FIST) (TWEAK ME) --------------------
+// -------------------- ERASE (FIST) --------------------
 const ERASE = {
   ENABLED: true,
-  HOVER_RADIUS: 0.7,   // <-- tweak: 0.4–1.2 (bigger = easier to erase)
-  COOLDOWN_MS: 180,    // rate-limit erasing
+  HOVER_RADIUS: 0.7,  // tweak 0.4–1.2
+  COOLDOWN_MS: 180,
+}
+// -------------------- ZOOM (PINCH) --------------------
+// spreading fingers apart => ZOOM IN (camera gets closer)
+const ZOOM = {
+  ENABLED: true,
+  SENSITIVITY: 12.0,  // tweak 8–30 (higher = stronger zoom)
+  MIN_DIST: 7.0,      // closest camera distance
+  MAX_DIST: 26.0,     // farthest camera distance
 }
 
-// -------------------- RETRO HOLO FIELD (TWEAK ME) --------------------
+// -------------------- RETRO HOLO FIELD --------------------
 const FIELD = {
   SIZE: 20,
 
@@ -158,6 +166,11 @@ document.body.appendChild(renderer.domElement)
 camera3d.position.set(0, 8, 12)
 camera3d.lookAt(0, 0, 0)
 
+// Camera zoom bookkeeping (keeps camera angle fixed)
+const CAM_TARGET = new THREE.Vector3(0, 0, 0)
+const CAM_DIR = camera3d.position.clone().sub(CAM_TARGET).normalize()
+let camDist = camera3d.position.distanceTo(CAM_TARGET)
+
 // -------------------- Ray -> Board plane mapping --------------------
 const raycaster = new THREE.Raycaster()
 const _tmpQuat = new THREE.Quaternion()
@@ -185,7 +198,7 @@ function boardPointFromNDC(ndcX, ndcY) {
 let inputNdcX = 0
 let inputNdcY = 0
 
-// board-local target point (cursor + route points)
+// board-local target point
 let targetX = 0
 let targetZ = 0
 
@@ -564,6 +577,9 @@ let lastMid = null // {x,y}
 let smDx = 0
 let smDy = 0
 
+// Zoom state
+let lastPinchDist = null
+
 // -------------------- FIST DETECTION--------------------
 const FIST_RATIO = 0.95 // try 0.85–1.15
 
@@ -577,7 +593,6 @@ function dist3(a, b) {
 function isFist(lm) {
   if (!lm) return false
 
-  // Palm center: wrist + MCP knuckles
   const palmIdx = [0, 5, 9, 13, 17]
   let cx = 0, cy = 0, cz = 0
   for (const i of palmIdx) {
@@ -590,11 +605,9 @@ function isFist(lm) {
   cz /= palmIdx.length
   const palm = { x: cx, y: cy, z: cz }
 
-  // Hand scale: palm width (index MCP to pinky MCP)
   const palmWidth = dist3(lm[5], lm[17])
   if (palmWidth < 1e-6) return false
 
-  // Fingertip cluster near palm in a fist
   const tips = [8, 12, 16, 20]
   let closed = 0
   for (const t of tips) {
@@ -602,9 +615,7 @@ function isFist(lm) {
     if (d < FIST_RATIO * palmWidth) closed++
   }
 
-  // Thumb also tends to tuck
   const thumbClosed = dist3(lm[4], palm) < (FIST_RATIO * 1.15) * palmWidth
-
   return closed >= 3 && thumbClosed
 }
 
@@ -713,15 +724,15 @@ function eraseRouteAt(localPoint) {
 const ws = new WebSocket('ws://localhost:8765')
 
 ws.addEventListener('open', () => {
-  console.log('WebSocket connected')
+  console.log('✅ WebSocket connected')
   usingWebSocket = true
 })
 ws.addEventListener('close', () => {
-  console.log('WebSocket closed')
+  console.log('❌ WebSocket closed')
   usingWebSocket = false
 })
 ws.addEventListener('error', () => {
-  console.log('WebSocket error (Python server not running?)')
+  console.log('⚠️ WebSocket error (Python server not running?)')
   usingWebSocket = false
 })
 
@@ -733,7 +744,7 @@ ws.addEventListener('message', (event) => {
   } catch {}
 })
 
-// Mouse fallback if WS isn’t connected
+// Mouse fallback
 window.addEventListener('mousemove', (e) => {
   if (usingWebSocket) return
   inputNdcX = (e.clientX / window.innerWidth) * 2 - 1
@@ -809,6 +820,8 @@ hands.onResults((results) => {
     smDx = 0
     smDy = 0
     setMode('none')
+    mustReleaseBeforeDraw = false
+    lastPinchDist = null
     cursor.material.color.setHex(0x00ffff)
     return
   }
@@ -827,14 +840,10 @@ hands.onResults((results) => {
 
   // -------------------- FIST ERASE MODE --------------------
   const fistClosed = isFist(lmA) || (lmB ? isFist(lmB) : false)
-
   if (fistClosed) {
     cursor.material.color.setHex(0xfff07a)
-
-    // stop any in-progress drawing
     endRoute()
 
-    // use lmA index tip as eraser pointer
     const tip = lmA[8]
     const ndcX = 1 - tip.x * 2
     const ndcY = 1 - tip.y * 2
@@ -856,6 +865,7 @@ hands.onResults((results) => {
     lastMid = null
     smDx = 0
     smDy = 0
+    lastPinchDist = null
     return
   } else {
     cursor.material.color.setHex(0x00ffff)
@@ -865,6 +875,7 @@ hands.onResults((results) => {
   const pinchB = lmB ? isPinching(lmB) : false
   const numPinching = (pinchA ? 1 : 0) + (pinchB ? 1 : 0)
 
+  // 0 pinches
   if (numPinching === 0) {
     endRoute()
     twoPinchActive = false
@@ -873,9 +884,11 @@ hands.onResults((results) => {
     smDy = 0
     setMode('none')
     mustReleaseBeforeDraw = false
+    lastPinchDist = null
     return
   }
 
+  // 2 pinches: rotate + zoom
   if (numPinching === 2) {
     if (!setMode('rotate')) return
 
@@ -888,6 +901,27 @@ hands.onResults((results) => {
 
     const a = lmA[8]
     const b = lmB[8]
+
+    // ---- ZOOM: distance between the two pinched index tips ----
+    // spreading apart => pinchDist increases => zoom IN => camDist decreases
+    if (ZOOM.ENABLED) {
+      const dx = a.x - b.x
+      const dy = a.y - b.y
+      const pinchDist = Math.sqrt(dx * dx + dy * dy)
+
+      if (lastPinchDist != null) {
+        const delta = pinchDist - lastPinchDist
+        camDist -= delta * ZOOM.SENSITIVITY
+        camDist = THREE.MathUtils.clamp(camDist, ZOOM.MIN_DIST, ZOOM.MAX_DIST)
+
+        camera3d.position.copy(CAM_DIR.clone().multiplyScalar(camDist).add(CAM_TARGET))
+        camera3d.lookAt(CAM_TARGET)
+      }
+
+      lastPinchDist = pinchDist
+    }
+
+    // ---- ROTATE: based on midpoint motion ----
     const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
 
     if (!twoPinchActive) {
@@ -911,6 +945,9 @@ hands.onResults((results) => {
     lastMid = mid
     return
   }
+
+  // leaving 2-pinch mode => reset zoom tracker
+  lastPinchDist = null
 
   // 1 pinch: draw
   const now = performance.now()
