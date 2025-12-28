@@ -6,6 +6,28 @@ import { Hands, HAND_CONNECTIONS } from '@mediapipe/hands'
 import { Camera } from '@mediapipe/camera_utils'
 import { drawConnectors, drawLandmarks } from '@mediapipe/drawing_utils'
 
+import { supabase } from './supabaseClient'
+
+console.log('SUPABASE URL:', import.meta.env.VITE_SUPABASE_URL)
+
+async function testInsert() {
+  const fakeGrid = {
+    version: 1,
+    cells: [{ x: 1, y: 2, type: 'test' }],
+    savedAt: Date.now(),
+  }
+
+  const { data, error } = await supabase
+    .from('drawings')
+    .insert([{ user_id: '00000000-0000-0000-0000-000000000000', title: 'test', grid: fakeGrid }])
+    .select()
+    .single()
+
+  console.log('insert result:', { data, error })
+}
+
+testInsert()
+
 // -------------------- TUNING --------------------
 const GRID_SCALE = 8
 
