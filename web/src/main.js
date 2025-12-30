@@ -10,24 +10,6 @@ import { supabase } from './supabaseClient'
 
 console.log('SUPABASE URL:', import.meta.env.VITE_SUPABASE_URL)
 
-async function testInsert() {
-  const fakeGrid = {
-    version: 1,
-    cells: [{ x: 1, y: 2, type: 'test' }],
-    savedAt: Date.now(),
-  }
-
-  const { data, error } = await supabase
-    .from('drawings')
-    .insert([{ user_id: '00000000-0000-0000-0000-000000000000', title: 'test', grid: fakeGrid }])
-    .select()
-    .single()
-
-  console.log('insert result:', { data, error })
-}
-
-testInsert()
-
 // -------------------- TUNING --------------------
 const GRID_SCALE = 8
 
@@ -56,12 +38,12 @@ let lastRotateTime = 0
 const ROTATE_TO_DRAW_BLOCK_MS = 400 // tweak: 150–400 feels good
 
 // Drawing smoothing / filtering
-const DRAW_SMOOTH = 0.35    // 0..1 higher = smoother
-const DRAW_MIN_STEP = 0.18  // world units; ignore tiny movement
+const DRAW_SMOOTH = 0.35 // 0..1 higher = smoother
+const DRAW_MIN_STEP = 0.18 // world units; ignore tiny movement
 
 // Straightening
 const STRAIGHT_ANGLE_DEG = 12 // smaller = straighter (8–18)
-const STRAIGHT_SNAP = 0.6     // 0..1 how hard to snap
+const STRAIGHT_SNAP = 0.6 // 0..1 how hard to snap
 
 // Tube perf
 const ROUTE_REBUILD_EVERY = 3 // rebuild tube every N accepted points
@@ -69,16 +51,16 @@ const ROUTE_REBUILD_EVERY = 3 // rebuild tube every N accepted points
 // -------------------- ERASE (FIST) --------------------
 const ERASE = {
   ENABLED: true,
-  HOVER_RADIUS: 0.7,  // tweak 0.4–1.2
+  HOVER_RADIUS: 0.7, // tweak 0.4–1.2
   COOLDOWN_MS: 180,
 }
 // -------------------- ZOOM (PINCH) --------------------
 // spreading fingers apart => ZOOM IN (camera gets closer)
 const ZOOM = {
   ENABLED: true,
-  SENSITIVITY: 12.0,  // tweak 8–30 (higher = stronger zoom)
-  MIN_DIST: 7.0,      // closest camera distance
-  MAX_DIST: 26.0,     // farthest camera distance
+  SENSITIVITY: 12.0, // tweak 8–30 (higher = stronger zoom)
+  MIN_DIST: 7.0, // closest camera distance
+  MAX_DIST: 26.0, // farthest camera distance
 }
 
 // -------------------- RETRO HOLO FIELD --------------------
@@ -86,14 +68,14 @@ const FIELD = {
   SIZE: 20,
 
   // Make the plane “wide” so the 100y direction runs LEFT <-> RIGHT
-  W: 19.6,          // width across X (endzone-to-endzone direction)
-  L: 14,            // height across Z (sideline-to-sideline)
+  W: 19.6, // width across X (endzone-to-endzone direction)
+  L: 14, // height across Z (sideline-to-sideline)
 
   HOLO: true,
   HOLO_ALPHA: 0.35,
   HOLO_EMISSIVE_BOOST: 0.18,
 
-  STRIPE_ALPHA: 0.10,
+  STRIPE_ALPHA: 0.1,
   NOISE_ALPHA: 0.14,
   TEX_REPEAT_X: 1.0,
   TEX_REPEAT_Z: 1.0,
@@ -128,14 +110,14 @@ const FIELD = {
 // -------------------- GOAL POSTS --------------------
 const GOALPOST = {
   SHOW: true,
-  HEIGHT: 2.8,        // how tall the uprights are
-  WIDTH: 1.8,         // distance between uprights
-  BAR_HEIGHT: 0.9,    // height of the crossbar from ground
-  THICKNESS: 0.06,    // tube thickness
-  COLOR: 0x7ffcff,    // holographic cyan
-  ALPHA: 0.65,        // transparency
-  Z_OFFSET: 0.0,      // shift toward near/far sideline if needed
-  INSET: 0.15,        // pull posts slightly inside from the exact line
+  HEIGHT: 2.8, // how tall the uprights are
+  WIDTH: 1.8, // distance between uprights
+  BAR_HEIGHT: 0.9, // height of the crossbar from ground
+  THICKNESS: 0.06, // tube thickness
+  COLOR: 0x7ffcff, // holographic cyan
+  ALPHA: 0.65, // transparency
+  Z_OFFSET: 0.0, // shift toward near/far sideline if needed
+  INSET: 0.15, // pull posts slightly inside from the exact line
 }
 
 // -------------------- 1) Webcam video (DOM) --------------------
@@ -172,12 +154,7 @@ const scene = new THREE.Scene()
 const board = new THREE.Group()
 scene.add(board)
 
-const camera3d = new THREE.PerspectiveCamera(
-  60,
-  window.innerWidth / window.innerHeight,
-  0.1,
-  1000
-)
+const camera3d = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000)
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
 renderer.setSize(window.innerWidth, window.innerHeight)
@@ -262,7 +239,7 @@ function makeRetroFieldTexture() {
   }
 
   const marginX = Math.floor(W * 0.03)
-  const marginY = Math.floor(H * 0.10)
+  const marginY = Math.floor(H * 0.1)
   const fx0 = marginX
   const fx1 = W - marginX
   const fz0 = marginY
@@ -353,7 +330,7 @@ function makeRetroFieldTexture() {
     const x = playStartX + yds * pxPerYard
     const is10 = yds % 10 === 0
     const thick = is10 ? FIELD.LINE_THICK : Math.max(2, FIELD.LINE_THICK - 1)
-    const alpha = is10 ? 0.95 : 0.70
+    const alpha = is10 ? 0.95 : 0.7
     line(x, fz0, x, fz1, thick, alpha)
   }
 
@@ -452,7 +429,7 @@ board.add(fieldPlane)
 const glowMat = new THREE.MeshBasicMaterial({
   map: fieldTex,
   transparent: true,
-  opacity: FIELD.HOLO ? (FIELD.HOLO_ALPHA * FIELD.HOLO_EMISSIVE_BOOST) : 0,
+  opacity: FIELD.HOLO ? FIELD.HOLO_ALPHA * FIELD.HOLO_EMISSIVE_BOOST : 0,
   depthWrite: false,
   blending: THREE.AdditiveBlending,
 })
@@ -523,6 +500,38 @@ const routes = []
 
 let drawSmoothPoint = null
 let acceptedPointsSinceRebuild = 0
+
+//NEW: Convert current drawing state into JSON-safe data
+function getGridSnapshot() {
+  return {
+    version: 1,
+    routes: routes.map((r) => ({
+      points: r.points.map((p) => ({ x: p.x, z: p.z })),
+    })),
+  }
+}
+
+//NEW: Save the current snapshot (manual trigger)
+async function saveGridNow() {
+  const grid = getGridSnapshot()
+
+  const { data, error } = await supabase
+    .from('drawings')
+    .insert([
+      {
+        user_id: '00000000-0000-0000-0000-000000000000',
+        title: 'grid-save',
+        grid,
+      },
+    ])
+    .select()
+    .single()
+
+  console.log('saveGridNow:', { data, error })
+}
+
+//NEW: expose to console so  don’t spam inserts on refresh
+window.saveGridNow = saveGridNow
 
 function startRoute() {
   isDrawing = true
@@ -616,7 +625,9 @@ function isFist(lm) {
   if (!lm) return false
 
   const palmIdx = [0, 5, 9, 13, 17]
-  let cx = 0, cy = 0, cz = 0
+  let cx = 0,
+    cy = 0,
+    cz = 0
   for (const i of palmIdx) {
     cx += lm[i].x
     cy += lm[i].y
@@ -637,7 +648,7 @@ function isFist(lm) {
     if (d < FIST_RATIO * palmWidth) closed++
   }
 
-  const thumbClosed = dist3(lm[4], palm) < (FIST_RATIO * 1.15) * palmWidth
+  const thumbClosed = dist3(lm[4], palm) < FIST_RATIO * 1.15 * palmWidth
   return closed >= 3 && thumbClosed
 }
 
@@ -973,7 +984,7 @@ hands.onResults((results) => {
 
   // 1 pinch: draw
   const now = performance.now()
-  if (mustReleaseBeforeDraw && (now - lastRotateTime) < ROTATE_TO_DRAW_BLOCK_MS) return
+  if (mustReleaseBeforeDraw && now - lastRotateTime < ROTATE_TO_DRAW_BLOCK_MS) return
   if (!setMode('draw')) return
   mustReleaseBeforeDraw = false
 
@@ -1014,13 +1025,9 @@ hands.onResults((results) => {
     const C = currentRoute[currentRoute.length - 1]
 
     const ang = angleDeg(A, B, C)
-    if (ang > (180 - STRAIGHT_ANGLE_DEG)) {
+    if (ang > 180 - STRAIGHT_ANGLE_DEG) {
       const AC = C.clone().sub(A)
-      const t = THREE.MathUtils.clamp(
-        B.clone().sub(A).dot(AC) / AC.lengthSq(),
-        0,
-        1
-      )
+      const t = THREE.MathUtils.clamp(B.clone().sub(A).dot(AC) / AC.lengthSq(), 0, 1)
       const proj = A.clone().add(AC.multiplyScalar(t))
       B.lerp(proj, STRAIGHT_SNAP)
 
