@@ -501,7 +501,7 @@ const routes = []
 let drawSmoothPoint = null
 let acceptedPointsSinceRebuild = 0
 
-//NEW: Convert current drawing state into JSON-safe data
+//Convert current drawing state into JSON-safe data
 function getGridSnapshot() {
   return {
     version: 1,
@@ -511,7 +511,7 @@ function getGridSnapshot() {
   }
 }
 
-//NEW: Save the current snapshot (manual trigger)
+//Save the current snapshot (manual trigger)
 async function saveGridNow() {
   const grid = getGridSnapshot()
 
@@ -530,7 +530,24 @@ async function saveGridNow() {
   console.log('saveGridNow:', { data, error })
 }
 
-//NEW: expose to console so  don’t spam inserts on refresh
+async function loadLatestGrid() {
+  const { data, error } = await supabase
+    .from('drawings')
+    .select('id, title, grid, created_at')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .single()
+
+  console.log('loadLatestGrid:', { data, error })
+
+  if (error || !data?.grid) return null
+  return data.grid
+}
+
+window.loadLatestGrid = loadLatestGrid
+
+
+//expose to console so  don’t spam inserts on refresh
 window.saveGridNow = saveGridNow
 
 function startRoute() {
