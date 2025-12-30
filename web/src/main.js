@@ -10,6 +10,85 @@ import { supabase } from './supabaseClient'
 
 console.log('SUPABASE URL:', import.meta.env.VITE_SUPABASE_URL)
 
+// -------------------- AUTH UI --------------------
+const emailEl = document.getElementById('email')
+const passEl = document.getElementById('password')
+const signupBtn = document.getElementById('signup')
+const loginBtn = document.getElementById('login')
+const logoutBtn = document.getElementById('logout')
+const statusEl = document.getElementById('auth-status')
+
+function setStatus(msg) {
+  statusEl.textContent = msg
+}
+
+function setLoggedInUI(isLoggedIn, email = '') {
+  logoutBtn.style.display = isLoggedIn ? 'inline-block' : 'none'
+  signupBtn.style.display = isLoggedIn ? 'none' : 'inline-block'
+  loginBtn.style.display = isLoggedIn ? 'none' : 'inline-block'
+  emailEl.disabled = isLoggedIn
+  passEl.disabled = isLoggedIn
+  setStatus(isLoggedIn ? `Logged in as ${email}` : 'Logged out')
+}
+
+// 1) Sign up
+signupBtn?.addEventListener('click', async () => {
+  const email = emailEl.value.trim()
+  const password = passEl.value
+  setStatus('Signing up...')
+
+  const { data, error } = await supabase.auth.signUp({ email, password })
+  if (error) {
+    setStatus(`Sign up error: ${error.message}`)
+    return
+  }
+
+  // If email confirmation is OFF, you'll be logged in right away.
+  const userEmail = data?.user?.email || email
+  setLoggedInUI(true, userEmail)
+})
+
+// 2) Log in
+loginBtn?.addEventListener('click', async () => {
+  const email = emailEl.value.trim()
+  const password = passEl.value
+  setStatus('Logging in...')
+
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+  if (error) {
+    setStatus(`Login error: ${error.message}`)
+    return
+  }
+
+  setLoggedInUI(true, data.user.email)
+})
+
+// 3) Log out
+logoutBtn?.addEventListener('click', async () => {
+  setStatus('Logging out...')
+  const { error } = await supabase.auth.signOut()
+  if (error) {
+    setStatus(`Logout error: ${error.message}`)
+    return
+  }
+  setLoggedInUI(false)
+})
+
+// 4) On page load: restore session if already logged in
+const { data: sessionData } = await supabase.auth.getSession()
+if (sessionData?.session?.user) {
+  setLoggedInUI(true, sessionData.session.user.email)
+} else {
+  setLoggedInUI(false)
+}
+
+// 5) React to auth changes (login/logout in another tab, refresh, etc.)
+supabase.auth.onAuthStateChange((_event, session) => {
+  if (session?.user) setLoggedInUI(true, session.user.email)
+  else setLoggedInUI(false)
+})
+
+
 // -------------------- TUNING --------------------
 const GRID_SCALE = 8
 

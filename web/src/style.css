@@ -13,6 +13,35 @@ html, body {
   transform: scaleX(-1);
 }
 
+#auth-ui {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 9999;
+
+  display: flex;
+  gap: 8px;
+  align-items: center;
+
+  padding: 10px 12px;
+  border-radius: 10px;
+
+  background: rgba(0, 0, 0, 0.55);
+  color: white;
+  backdrop-filter: blur(6px);
+}
+
+#auth-ui input {
+  width: 180px;
+}
+
+#auth-status {
+  margin-left: 8px;
+  font-size: 12px;
+  opacity: 0.9;
+}
+
+
 
 /* Fullscreen webcam video background */
 #bg-video {
