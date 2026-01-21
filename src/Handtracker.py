@@ -50,12 +50,14 @@ while True:
     # Process the RGB image and find hand landmarks
     # results contains all detection information
     results = hands.process(image)
+    # --------------- Landmark drawing --------------------
     # Convert the image back to BGR for OpenCV display
     image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
 
     # -------------------- Drawing landmarks --------------------
 
     # If at least one hand was detected
+    # results.multi_hand_landmarks is a list of detected hands
     if results.multi_hand_landmarks:
         # Loop through each detected hand
         for i, hand_landmarks in enumerate(results.multi_hand_landmarks):
@@ -78,6 +80,10 @@ while True:
             pips = [6, 10, 14, 18]
 
             fingers = []  # will store 1 if finger is up, 0 if down
+
+            # Check for each finger (except thumb) if it is up
+            # Compare y-coordinate of fingertip and pip joint
+            # If fingertip y < pip y, finger is up (1), else down (0)
 
             for tip, pip in zip(tips, pips):
                 fingers.append(1 if lm[tip].y < lm[pip].y else 0)
